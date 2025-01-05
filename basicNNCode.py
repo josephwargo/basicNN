@@ -13,19 +13,40 @@ class neuronLayer(object):
         if adam:
             # constants
             self.beta1 = .9
+            self.beta1T = self.beta1
             self.beta2 = .999
+            self.beta2T = self.beta2
+            self.epsilon = 10e-8
+            self.t = 1
             # arrays to store 
-            self.firstMomentW = np.zeros(shape=(self.prevLayerShape,self.outputShape))
-            self.firstMomentB = np.zeros(shape=(outputShape))
-            self.secondMomentW = np.zeros(shape=(self.prevLayerShape,self.outputShape))
-            self.secondMomentB = np.zeros(shape=(outputShape))
+            self.mdW = np.zeros(shape=(self.prevLayerShape,self.outputShape))
+            self.mdB = np.zeros(shape=(outputShape))
+            self.vdW = np.zeros(shape=(self.prevLayerShape,self.outputShape))
+            self.vdB = np.zeros(shape=(outputShape))
     
     def updateAdam(self, dCdW, dCdB):
-        newdCdW = self.beta1*self.firstMomentW + (1-self.beta1)*dCdW
-        newdCdB = self.beta1*self.firstMomentB + (1-self.beta1)*dCdB
-        # updating local arrays for next iteration
-        self.firstMomentW = newdCdW
-        self.firstMomentB = newdCdB
+        # momentum
+        self.mdW = self.beta1*self.mdW + (1-self.beta1)*dCdW
+        self.mdB = self.beta1*self.mdB + (1-self.beta1)*dCdB
+        # print('Momentum:')
+        # print(self.mdW)
+        # RMSprop
+        self.vdW = self.beta2*self.vdW + (1-self.beta2)*(dCdW**2)
+        self.vdB = self.beta2*self.vdB + (1-self.beta2)*(dCdB**2)
+        # print('RMSprop:')
+        # print(self.vdW)
+        # bias correction
+        mdWHat = self.mdW / (1-self.beta1**self.t)
+        mdBHat = self.mdB / (1-self.beta1**self.t)
+        vdWHat = self.vdW / (1-self.beta2**self.t)
+        vdBHat = self.vdB / (1-self.beta2**self.t)
+        # adam
+        newdCdW = mdWHat / (np.sqrt(vdWHat)+self.epsilon)
+        newdCdB = mdBHat / (np.sqrt(vdBHat)+self.epsilon)
+        # newdCdW = self.mdW
+        # newdCdB = self.mdB
+        # print(np.mean(np.absolute(newdCdW)))
+        self.t+=1
         return newdCdW, newdCdB
 
 
@@ -38,7 +59,8 @@ class neuralNet(object):
             raise Exception('Length of hiddenLayerShapes does not match length of hiddenLayerActivations')
         if (lossFunction!='crossEntropyLoss') & (outputActivation!='softmax'):
             raise Exception('A cost function of Cross Entropy Loss and an output layer activation of Softmax must be paired with each other')
-        
+        if adam & (learningRate>.01):
+            print('Warning: Learning rate may be too high for ADAM optimizer to function properly')
         # variables straight from initialization
         self.debug = debug
         self.adam = adam
@@ -73,7 +95,13 @@ class neuralNet(object):
     
     # no gradient function because this will only be paired with softmax, and they have a joint gradient function
     def crossEntropyLoss(self, y, y_pred):
-       return -np.sum(y*np.log(y_pred))
+    #    if 0 in list(y_pred):
+    #        print(np.log(y))
+    #        print(y)
+        #    print(y_pred)
+        #    print()
+        # y_pred = y_pred + 10e-8
+        return -np.sum(y*np.log(y_pred))
 
     # functions to compute activation and gradient of activations
     def sigmoid(self, x):
@@ -82,6 +110,7 @@ class neuralNet(object):
         return y*(1-y)
 
     def relu(self, x):
+        # print(x)
         return np.maximum(0, x)
     def reluGradient(self, y):
         return (y>0)*1
