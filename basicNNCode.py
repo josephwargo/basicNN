@@ -2,42 +2,68 @@ import numpy as np
 
 # individual neuron
 class neuronLayer(object):
-    def __init__(self, prevLayerShape, outputShape):
+    def __init__(self, prevLayerShape, outputShape, adam):
         self.prevLayerShape = prevLayerShape
         self.outputShape = outputShape
         self.W = np.random.normal(0,.1, size=(self.prevLayerShape,self.outputShape))
         self.b = np.zeros(shape=(outputShape))
         self.N = np.zeros(shape=(outputShape))
+        # adam
+        self.adam = adam
+        if adam:
+            # constants
+            self.beta1 = .9
+            self.beta2 = .999
+            # arrays to store 
+            self.firstMomentW = np.zeros(shape=(self.prevLayerShape,self.outputShape))
+            self.firstMomentB = np.zeros(shape=(outputShape))
+            self.secondMomentW = np.zeros(shape=(self.prevLayerShape,self.outputShape))
+            self.secondMomentB = np.zeros(shape=(outputShape))
+    
+    def updateAdam(self, dCdW, dCdB):
+        newdCdW = self.beta1*self.firstMomentW + (1-self.beta1)*dCdW
+        newdCdB = self.beta1*self.firstMomentB + (1-self.beta1)*dCdB
+        # updating local arrays for next iteration
+        self.firstMomentW = newdCdW
+        self.firstMomentB = newdCdB
+        return newdCdW, newdCdB
+
 
 # entire net
 class neuralNet(object):
     def __init__(self, inputShape, outputShape, outputActivation, hiddenLayerShapes, 
-                 hiddenLayerActivations, lossFunction='MSE', learningRate=.001, debug=False):
+                 hiddenLayerActivations, lossFunction='MSE', learningRate=.001, adam=False, debug=False):
         # errors
         if len(hiddenLayerShapes)!=len(hiddenLayerActivations):
             raise Exception('Length of hiddenLayerShapes does not match length of hiddenLayerActivations')
         if (lossFunction!='crossEntropyLoss') & (outputActivation!='softmax'):
             raise Exception('A cost function of Cross Entropy Loss and an output layer activation of Softmax must be paired with each other')
+        
         # variables straight from initialization
-        self.debug=debug
+        self.debug = debug
+        self.adam = adam
         self.learningRate = learningRate
         self.lossFunction = lossFunction
         self.activations = hiddenLayerActivations + [outputActivation]
         self.reverseActivations = self.activations.copy()
         self.reverseActivations.reverse()
+        
         # initializing hidden layers and adding to dictionary of all layers
-        hiddenLayer1 = neuronLayer(inputShape, hiddenLayerShapes[0])
+        hiddenLayer1 = neuronLayer(inputShape, hiddenLayerShapes[0], adam)
         self.allLayers = {'hiddenLayer1': hiddenLayer1}
         if len(hiddenLayerShapes) > 1:
             for count, value in enumerate(hiddenLayerShapes):
                 layerNum = count+2
                 if count<len(hiddenLayerShapes)-1:
-                    self.allLayers["hiddenLayer{}".format(layerNum)] = neuronLayer(value, hiddenLayerShapes[count+1])
+                    self.allLayers["hiddenLayer{}".format(layerNum)] = neuronLayer(value, hiddenLayerShapes[count+1], adam)
+       
         # adding output layer to dictionary of all layers
-        outputLayer = neuronLayer(hiddenLayerShapes[-1], outputShape)
+        outputLayer = neuronLayer(hiddenLayerShapes[-1], outputShape, adam)
         self.allLayers['outputLayer'] = outputLayer
+
         # to track error
         self.error = None
+
 
     # functions to compute costs and gradients of costs
     def MSE(self, y, y_pred):
@@ -45,6 +71,7 @@ class neuralNet(object):
     def MSEgradient(self, y, y_pred):
         return -(y-y_pred)
     
+    # no gradient function because this will only be paired with softmax, and they have a joint gradient function
     def crossEntropyLoss(self, y, y_pred):
        return -np.sum(y*np.log(y_pred))
 
@@ -59,6 +86,7 @@ class neuralNet(object):
     def reluGradient(self, y):
         return (y>0)*1
     
+    # no gradient function because this will only be paired with Cross Entropy Loss, and they have a joint gradient function
     def softmax(self, x):
         normalization = np.max(x)
         numerator = np.exp(x - normalization)
@@ -95,13 +123,13 @@ class neuralNet(object):
             input = layer.N
         # storing final error
         if self.lossFunction == 'MSE':
-            # self.error = np.mean(.5*((output - layer.N)**2))
             self.error = self.MSE(output, layer.N)
         elif self.lossFunction == 'crossEntropyLoss':
             self.error = self.crossEntropyLoss(output, layer.N)
         else:
             raise Exception('Unknown cost function')
     
+    # rename and fold into the top
     def costGradient(self, output):
         # gradient of cost function WRT the output of the NN (activation)
         if self.lossFunction == 'MSE':
@@ -114,7 +142,7 @@ class neuralNet(object):
         """
         Gradient Notation:
         C = cost function
-        H = sigmoid activation
+        H = activation
         Z = Wx + b
         W = weights
         B = bias
@@ -146,11 +174,15 @@ class neuralNet(object):
                 prevLayer = self.allLayers[reverseKeys[count+1]]
                 dCdW = np.dot(prevLayer.N.reshape(-1,1), localError.reshape(1,-1)) # cost function WRT input weights - value used to update weights
                 dCdB = np.sum(localError, axis=0, keepdims=True) # cost function WRT input biases - value used to update bias
+                if currLayer.adam:
+                    dCdW, dCdB = currLayer.updateAdam(dCdW, dCdB)
                 dCdH = np.dot(currLayer.W, localError) # cost function WRT input node value - starting cost for next layer of backprop
             # weight and bias updates for when we hit the first hidden layer
             else:
                 dCdW = np.dot(input.reshape(-1,1), localError.reshape(1,-1)) # cost function WRT input weights - value used to update weights
                 dCdB = np.sum(localError, axis=0, keepdims=True) # cost function WRT input biases - value used to update bias
+                if currLayer.adam:
+                    dCdW, dCdB = currLayer.updateAdam(dCdW, dCdB)
             weightUpdates.append(dCdW)
             biasUpdates.append(dCdB)
         # updating weights and biases
