@@ -5,7 +5,8 @@ class neuronLayer(object):
     def __init__(self, prevLayerShape, outputShape, adam):
         self.prevLayerShape = prevLayerShape
         self.outputShape = outputShape
-        self.W = np.random.normal(0,.1, size=(self.prevLayerShape,self.outputShape))
+        xavier = np.sqrt(2/(self.prevLayerShape+self.outputShape))
+        self.W = np.random.normal(0,xavier, size=(self.prevLayerShape,self.outputShape))
         self.b = np.zeros(shape=(outputShape))
         self.N = np.zeros(shape=(outputShape))
         # adam
@@ -28,13 +29,9 @@ class neuronLayer(object):
         # momentum
         self.mdW = self.beta1*self.mdW + (1-self.beta1)*dCdW
         self.mdB = self.beta1*self.mdB + (1-self.beta1)*dCdB
-        # print('Momentum:')
-        # print(self.mdW)
         # RMSprop
         self.vdW = self.beta2*self.vdW + (1-self.beta2)*(dCdW**2)
         self.vdB = self.beta2*self.vdB + (1-self.beta2)*(dCdB**2)
-        # print('RMSprop:')
-        # print(self.vdW)
         # bias correction
         mdWHat = self.mdW / (1-self.beta1**self.t)
         mdBHat = self.mdB / (1-self.beta1**self.t)
@@ -43,9 +40,6 @@ class neuronLayer(object):
         # adam
         newdCdW = mdWHat / (np.sqrt(vdWHat)+self.epsilon)
         newdCdB = mdBHat / (np.sqrt(vdBHat)+self.epsilon)
-        # newdCdW = self.mdW
-        # newdCdB = self.mdB
-        # print(np.mean(np.absolute(newdCdW)))
         self.t+=1
         return newdCdW, newdCdB
 
@@ -53,7 +47,8 @@ class neuronLayer(object):
 # entire net
 class neuralNet(object):
     def __init__(self, inputShape, outputShape, outputActivation, hiddenLayerShapes, 
-                 hiddenLayerActivations, lossFunction='MSE', learningRate=.001, adam=False, debug=False):
+                 hiddenLayerActivations, lossFunction='MSE', learningRate=.001, epochs=1, batchSize=1,
+                 adam=False, debug=False):
         # errors
         if len(hiddenLayerShapes)!=len(hiddenLayerActivations):
             raise Exception('Length of hiddenLayerShapes does not match length of hiddenLayerActivations')
@@ -62,6 +57,8 @@ class neuralNet(object):
         if adam & (learningRate>.01):
             print('Warning: Learning rate may be too high for ADAM optimizer to function properly')
         # variables straight from initialization
+        self.batchSize = batchSize
+        self.epochs = epochs
         self.debug = debug
         self.adam = adam
         self.learningRate = learningRate
@@ -95,12 +92,7 @@ class neuralNet(object):
     
     # no gradient function because this will only be paired with softmax, and they have a joint gradient function
     def crossEntropyLoss(self, y, y_pred):
-    #    if 0 in list(y_pred):
-    #        print(np.log(y))
-    #        print(y)
-        #    print(y_pred)
-        #    print()
-        # y_pred = y_pred + 10e-8
+        y_pred = np.clip(y_pred, 10e-8, (1-(10e-8)))
         return -np.sum(y*np.log(y_pred))
 
     # functions to compute activation and gradient of activations
@@ -110,17 +102,21 @@ class neuralNet(object):
         return y*(1-y)
 
     def relu(self, x):
-        # print(x)
         return np.maximum(0, x)
     def reluGradient(self, y):
         return (y>0)*1
     
     # no gradient function because this will only be paired with Cross Entropy Loss, and they have a joint gradient function
     def softmax(self, x):
-        normalization = np.max(x)
-        numerator = np.exp(x - normalization)
-        denominator = np.sum(np.exp(x - normalization))
-        return numerator/denominator
+        if len(x.shape)>1:
+            normalization = np.max(x, axis=1, keepdims=True)
+            numerator = np.exp(x - normalization)
+            denominator = np.sum(numerator, axis=1, keepdims=True)
+        else:
+            normalization = np.max(x)
+            numerator = np.exp(x - normalization)
+            denominator = np.sum(numerator)
+        return numerator / (denominator+10e-8)
     
     # special gradient for softmax & cross entropy loss
     def dCdZ(self, y, y_pred):
@@ -131,19 +127,24 @@ class neuralNet(object):
         # cycling through each layer
         for count, layerName in enumerate(self.allLayers.keys()):
             layer = self.allLayers[layerName]
+            if self.batchSize>1:
+                bias = np.tile(layer.b, (self.batchSize, 1))
+            else:
+                bias = layer.b
             if self.debug:
                 print('Layer: ' + layerName)
                 print('Input shape: ' + str(input.shape))
                 print('Weight shape: ' + str(layer.W.shape))
                 print('Bias shape: ' + str(layer.b.shape))
-                
+
             # calculating dot product + activation
+            z = np.dot(input, layer.W) + bias
             if self.activations[count] == 'relu':
-                layer.N = self.relu(np.dot(input, layer.W) + layer.b)
+                layer.N = self.relu(z)
             elif self.activations[count]=='sigmoid':
-                layer.N = self.sigmoid(np.dot(input, layer.W) + layer.b)
+                layer.N = self.sigmoid(z)
             elif (self.activations[count]=='softmax'):
-                layer.N = self.softmax(np.dot(input, layer.W) + layer.b)
+                layer.N = self.softmax(z)
             else:
                 raise Exception('Unknown activation function')
             if self.debug:
@@ -201,15 +202,15 @@ class neuralNet(object):
             # weight+bias updates, and the dCdH for the next round of backpropogation
             if layerName != 'hiddenLayer1':
                 prevLayer = self.allLayers[reverseKeys[count+1]]
-                dCdW = np.dot(prevLayer.N.reshape(-1,1), localError.reshape(1,-1)) # cost function WRT input weights - value used to update weights
-                dCdB = np.sum(localError, axis=0, keepdims=True) # cost function WRT input biases - value used to update bias
+                dCdW = np.dot(prevLayer.N.T, localError)
+                dCdB = np.sum(localError, axis=0, keepdims=True) / self.batchSize # cost function WRT input biases - value used to update bias
                 if currLayer.adam:
                     dCdW, dCdB = currLayer.updateAdam(dCdW, dCdB)
-                dCdH = np.dot(currLayer.W, localError) # cost function WRT input node value - starting cost for next layer of backprop
+                dCdH = np.dot(localError, currLayer.W.T)
             # weight and bias updates for when we hit the first hidden layer
             else:
-                dCdW = np.dot(input.reshape(-1,1), localError.reshape(1,-1)) # cost function WRT input weights - value used to update weights
-                dCdB = np.sum(localError, axis=0, keepdims=True) # cost function WRT input biases - value used to update bias
+                dCdW = np.dot(input.T, localError) / self.batchSize
+                dCdB = np.sum(localError, axis=0, keepdims=True) / self.batchSize # cost function WRT input biases - value used to update bias
                 if currLayer.adam:
                     dCdW, dCdB = currLayer.updateAdam(dCdW, dCdB)
             weightUpdates.append(dCdW)
@@ -218,12 +219,18 @@ class neuralNet(object):
         for count, layerName in enumerate(reverseKeys):
             layer = self.allLayers[layerName]
             layer.W += -self.learningRate*weightUpdates[count]
-            layer.b += -self.learningRate*biasUpdates[count]
+            layer.b += -self.learningRate*(biasUpdates[count].reshape(-1,))
     
     def trainModel(self, input, output):
-        for row in range(len(input)):
-            self.forwardPass(input[row], output[row])
-            self.backwardPass(input[row], output[row])
+        numSamples = input.shape[0]
+        for epoch in range(self.epochs):
+            indices = np.random.permutation(numSamples)
+            inputShuffled = input[indices]
+            outputShuffled = output[indices]
+            for start in range(0, numSamples, self.batchSize):
+                end = min(start+self.batchSize, numSamples)
+                self.forwardPass(inputShuffled[start:end], outputShuffled[start:end])
+                self.backwardPass(inputShuffled[start:end], outputShuffled[start:end])
 
     # return predicted output for a given input
     def query(self, input):
