@@ -52,7 +52,7 @@ class neuralNet(object):
         # errors
         if len(hiddenLayerShapes)!=len(hiddenLayerActivations):
             raise Exception('Length of hiddenLayerShapes does not match length of hiddenLayerActivations')
-        if (lossFunction!='crossEntropyLoss') & (outputActivation!='softmax'):
+        if ((lossFunction=='crossEntropyLoss') & (outputActivation!='softmax')) or ((lossFunction!='crossEntropyLoss') & (outputActivation=='softmax')):
             raise Exception('A cost function of Cross Entropy Loss and an output layer activation of Softmax must be paired with each other')
         if adam & (learningRate>.01):
             print('Warning: Learning rate may be too high for ADAM optimizer to function properly')
@@ -97,7 +97,7 @@ class neuralNet(object):
 
     # functions to compute activation and gradient of activations
     def sigmoid(self, x):
-        return 1 / (1 + np.exp(-x))
+        return 1 / (1 + np.exp(-(x)))
     def sigmoidGradient(self, y):
         return y*(1-y)
 
@@ -105,6 +105,13 @@ class neuralNet(object):
         return np.maximum(0, x)
     def reluGradient(self, y):
         return (y>0)*1
+    
+    def tanH(self, x):
+        numerator = np.exp(x) - np.exp(-x)
+        denominator = np.exp(x) + np.exp(-x)
+        return numerator/denominator
+    def tanHGradient(self, y):
+        return 1 - y**2
     
     # no gradient function because this will only be paired with Cross Entropy Loss, and they have a joint gradient function
     def softmax(self, x):
@@ -143,6 +150,8 @@ class neuralNet(object):
                 layer.N = self.relu(z)
             elif self.activations[count]=='sigmoid':
                 layer.N = self.sigmoid(z)
+            elif self.activations[count]=='tanH':
+                layer.N = self.tanH(z)
             elif (self.activations[count]=='softmax'):
                 layer.N = self.softmax(z)
             else:
@@ -195,6 +204,9 @@ class neuralNet(object):
             elif self.reverseActivations[count] == 'sigmoid':
                 dHdZ = self.sigmoidGradient(currLayer.N)
                 localError = dCdH * dHdZ
+            elif self.reverseActivations[count] == 'tanH':
+                dHdZ = self.tanHGradient(currLayer.N)
+                localError = dCdH * dHdZ
             # special case of softmax & cross entropy loss
             elif self.reverseActivations[count] == 'softmax':
                 localError = self.dCdZ(output, currLayer.N)
@@ -240,6 +252,8 @@ class neuralNet(object):
                 input = self.relu(np.dot(input, layer.W) + layer.b)
             elif self.activations[count] == 'sigmoid':
                 input = self.sigmoid(np.dot(input, layer.W) + layer.b)
+            elif self.activations[count] == 'tanH':
+                input = self.tanH(np.dot(input, layer.W) + layer.b)
             elif self.activations[count] == 'softmax':
                 input = self.softmax(np.dot(input, layer.W) + layer.b)
         return input
